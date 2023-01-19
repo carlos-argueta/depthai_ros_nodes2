@@ -96,9 +96,9 @@ class TrafficSignDetector(Node):
             self.labelMap = ['nothing','crosswalk ahead','give way','green light','priority road','red light','right turn','stop sign','traffic light','yellow light']
             
             print("Warming up")
-            time.sleep(5)
+            #time.sleep(5)
             print("Done")
-            timer_period = 1.0  # seconds
+            timer_period = 0.2  # seconds
             self.pub_timer = self.create_timer(timer_period, self.detections_publisher)
             self.pub_i = 0
 
