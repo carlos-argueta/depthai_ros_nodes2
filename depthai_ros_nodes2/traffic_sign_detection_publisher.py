@@ -8,11 +8,12 @@ from geometry_msgs.msg import PointStamped
 from depthai_ros_msgs.msg import SpatialDetection, SpatialDetectionArray
 from vision_msgs.msg import ObjectHypothesis, BoundingBox2D
 
+import cv2
 from cv_bridge import CvBridge, CvBridgeError
 
 from pathlib import Path
 import sys
-import cv2
+
 import depthai as dai
 import numpy as np
 import time
