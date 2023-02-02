@@ -8,6 +8,11 @@ from geometry_msgs.msg import PointStamped
 from depthai_ros_msgs.msg import SpatialDetection, SpatialDetectionArray
 from vision_msgs.msg import ObjectHypothesis, BoundingBox2D
 
+import tf2_ros
+from tf2_ros.transform_listener import TransformListener
+
+import PyKDL
+
 import cv2
 from cv_bridge import CvBridge, CvBridgeError
 
@@ -28,21 +33,30 @@ class TrafficSignDetector(Node):
         self.cam_id = ''
         if self.has_parameter('~cam_id'):
             self.cam_id = self.get_parameter('~cam_id')
-
-        self.camera_name = self.get_parameter_or("~camera_name", Parameter("~camera_name", Parameter.Type.STRING, "default_cam")).value
+        self.camera_name = self.get_parameter_or("~camera_name", Parameter("~camera_name", Parameter.Type.STRING, "oak")).value
         self.camera_height_from_floor = 390
+        self.nn_path = self.get_parameter_or("~nn_path", Parameter("~nn_path", Parameter.Type.STRING, "models/205+track1_all_signs_3500_openvino_2021.4_5shave.blob")).value
         self.source_frame = self.camera_name+"_right_camera_optical_frame"
+        self.debug = self.get_parameter_or("~debug", Parameter("~debug", Parameter.Type.BOOL, False)).value
 
-        self.bridge = CvBridge()
 
+        # Declare subscribers
         self.rgb_image_pub = self.create_publisher(Image, '/'+self.camera_name+'/rgb/image', 5)
         self.dets_pub = self.create_publisher(SpatialDetectionArray, '/'+self.camera_name+'/detections/traffic_sign_detections', 5)
 
-        self.labelMap = ['nothing','crosswalk ahead','give way','green light','priority road','red light','right turn','stop sign','traffic light','yellow light']
-            
+        # Create the timer
         self.timer_ = self.create_timer(0.2, self.timer_callback)
 
-        self.debug = False
+        # Labels for the detections
+        self.labelMap = ['nothing','crosswalk ahead','give way','green light','priority road','red light','right turn','stop sign','traffic light','yellow light']
+            
+        self.bridge = CvBridge()
+
+        self.tf_buffer = tf2_ros.Buffer()
+        # NEVER EVER FORGET TO CREATE A LISTENER OR YOU WON'T GET ANY TRANSFORM
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        tf2_ros.TransformRegistration().add(PointStamped, self.do_transform_point)
 
     def timer_callback(self):
         
@@ -102,7 +116,39 @@ class TrafficSignDetector(Node):
             camera_point.point.y = (detection.spatialCoordinates.y + self.camera_height_from_floor) / 1000.0;
             camera_point.point.z = detection.spatialCoordinates.z / 1000.0;
 
-            base_point = camera_point
+            # Convert point from camera optical frame to camera frame
+            target_frame = self.camera_name+"_right_camera_frame"
+            source_frame = self.camera_name+"_right_camera_optical_frame"
+            
+            
+            #tf_listener = tf2_ros.TransformListener(tf_buffer)
+            
+            frame_point = None
+            base_point = None
+            
+            try:
+                transform = self.tf_buffer.lookup_transform(target_frame,
+                                                       source_frame,
+                                                       rclpy.time.Time(), #get the tf at first available time
+                                                       ) 
+                frame_point = self.do_transform_point(camera_point, transform)
+            except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as ex:
+                self.get_logger().error('Error looking up transform: %s' % ex)
+
+        
+            # Convert the point from camera frame to target frame
+            # This will change the forward direction from Z (the camera front) to X, the default ROS front
+            target_frame = "base_link"
+            source_frame = self.camera_name+"_right_camera_frame"
+            try:
+                transform2 = self.tf_buffer.lookup_transform(target_frame,
+                    source_frame, #source frame
+                    rclpy.time.Time(), #get the tf at first available time
+                    ) 
+                base_point = self.do_transform_point(frame_point, transform2)
+            except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as ex:
+                self.get_logger().error('Error looking up transform: %s' % ex)
+            
 
             # Add detection boxes for later publishing
             det_box = [x1, y1, x2, y2] # The bounding box
@@ -119,8 +165,9 @@ class TrafficSignDetector(Node):
             cv2.putText(frame, f"X: {int(detection.spatialCoordinates.x)} mm", (x1 + 10, y1 + 50), cv2.FONT_HERSHEY_TRIPLEX, 0.5, 255)
             cv2.putText(frame, f"Y: {int(detection.spatialCoordinates.y)} mm", (x1 + 10, y1 + 65), cv2.FONT_HERSHEY_TRIPLEX, 0.5, 255)
             cv2.putText(frame, f"Z: {int(detection.spatialCoordinates.z)} mm", (x1 + 10, y1 + 80), cv2.FONT_HERSHEY_TRIPLEX, 0.5, 255)
-            print("Distance", detection.spatialCoordinates.z)
             cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), cv2.FONT_HERSHEY_SIMPLEX)
+
+            print("Label:", label, "Distance:", detection.spatialCoordinates.z)
 
         if self.debug:
             cv2.putText(frame, "NN fps: {:.2f}".format(self.fps), (2, frame.shape[0] - 4), cv2.FONT_HERSHEY_TRIPLEX, 0.4, (255,255,255))
@@ -204,7 +251,7 @@ class TrafficSignDetector(Node):
         self.get_logger().info("Creating pipeline")
         
         # Get argument first
-        nnBlobPath = str((Path(__file__).parent / Path('models/205+track1_all_signs_3500_openvino_2021.4_5shave.blob')).resolve().absolute())
+        nnBlobPath = str((Path(__file__).parent / Path(self.nn_path)).resolve().absolute())
 
 
         if not Path(nnBlobPath).exists():
@@ -272,6 +319,23 @@ class TrafficSignDetector(Node):
         spatialDetectionNetwork.passthroughDepth.link(xoutDepth.input)
 
         return pipeline
+
+    def transform_to_kdl(self, t):
+        return PyKDL.Frame(PyKDL.Rotation.Quaternion(t.transform.rotation.x, t.transform.rotation.y,
+                                                  t.transform.rotation.z, t.transform.rotation.w),
+                        PyKDL.Vector(t.transform.translation.x, 
+                                     t.transform.translation.y, 
+                                     t.transform.translation.z))
+
+    def do_transform_point(self, point, transform):
+        p = self.transform_to_kdl(transform) * PyKDL.Vector(point.point.x, point.point.y, point.point.z)
+        res = PointStamped()
+        res.point.x = p[0]
+        res.point.y = p[1]
+        res.point.z = p[2]
+        res.header = transform.header
+        return res
+
 
 def main(args=None):
     
