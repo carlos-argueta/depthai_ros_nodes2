@@ -134,6 +134,7 @@ class TrafficSignDetector(Node):
                 frame_point = self.do_transform_point(camera_point, transform)
             except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as ex:
                 self.get_logger().error('Error looking up transform: %s' % ex)
+                return
 
         
             # Convert the point from camera frame to target frame
@@ -148,6 +149,7 @@ class TrafficSignDetector(Node):
                 base_point = self.do_transform_point(frame_point, transform2)
             except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as ex:
                 self.get_logger().error('Error looking up transform: %s' % ex)
+                return
             
 
             # Add detection boxes for later publishing
