@@ -254,7 +254,7 @@ class TrafficSignDetector(Node):
         
         # Get argument first
         nnBlobPath = str((Path(__file__).parent / Path(self.nn_path)).resolve().absolute())
-
+        print("path", nnBlobPath)
 
         if not Path(nnBlobPath).exists():
             import sys
