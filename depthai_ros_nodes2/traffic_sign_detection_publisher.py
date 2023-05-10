@@ -253,8 +253,9 @@ class TrafficSignDetector(Node):
         self.get_logger().info("Creating pipeline")
         
         # Get argument first
+        print("path1", self.nn_path)
         nnBlobPath = str((Path(__file__).parent / Path(self.nn_path)).resolve().absolute())
-        print("path", nnBlobPath)
+        print("path2", nnBlobPath)
 
         if not Path(nnBlobPath).exists():
             import sys
